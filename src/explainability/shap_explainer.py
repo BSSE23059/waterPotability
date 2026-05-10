@@ -53,7 +53,14 @@ def generate_shap_artifacts(
 
     logger.info("Generating SHAP explanations using TreeExplainer...")
     explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_val)
+    raw_shap_values = explainer.shap_values(X_val)
+    if isinstance(raw_shap_values, list):
+        shap_values = raw_shap_values[1] if len(raw_shap_values) > 1 else raw_shap_values[0]
+    else:
+        shap_values = np.asarray(raw_shap_values)
+        if shap_values.ndim == 3:
+            class_index = 1 if shap_values.shape[2] > 1 else 0
+            shap_values = shap_values[:, :, class_index]
 
     # Convert to numpy if DataFrame
     X_val_arr = X_val.values if hasattr(X_val, "values") else X_val

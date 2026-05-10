@@ -11,6 +11,7 @@ Usage:
 import argparse
 import os
 import sys
+from contextlib import nullcontext
 
 # Ensure project root is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +29,7 @@ from src.evaluation.threshold import optimize_threshold, diagnose_probability_di
 from src.explainability.shap_explainer import generate_shap_artifacts
 from src.preprocessing.pipeline import build_pipeline, get_pipeline_feature_names
 from src.training.baseline import train_baseline
-from src.training.trainer import train_xgboost, get_default_params
+from src.training.model_selection import select_best_model
 from src.training.tuner import run_optuna_study
 from src.utils.artifact_manager import save_artifacts, save_processed_data
 from src.utils.logger import get_logger
@@ -54,7 +55,15 @@ def run_training_pipeline() -> None:
         experiment_name=CONFIG.mlflow.experiment_name,
     )
 
-    with mlflow.start_run(run_name=f"Pipeline_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"):
+    try:
+        run_context = mlflow.start_run(
+            run_name=f"Pipeline_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+    except Exception as e:
+        logger.warning(f"MLflow parent run disabled; continuing without tracking: {e}")
+        run_context = nullcontext()
+
+    with run_context:
 
         # STEP 1: Load data
         logger.info("STEP 1: Loading dataset...")
@@ -72,7 +81,7 @@ def run_training_pipeline() -> None:
 
         # STEPS 4–7: Build and fit preprocessing pipeline (train only)
         logger.info("STEPS 4-7: Building and fitting preprocessing pipeline...")
-        preprocessing_pipeline = build_pipeline()
+        preprocessing_pipeline = build_pipeline(add_engineered_features=False)
         X_train_proc = preprocessing_pipeline.fit_transform(X_train, y_train)
         X_val_proc   = preprocessing_pipeline.transform(X_val)
         X_test_proc  = preprocessing_pipeline.transform(X_test)
@@ -107,20 +116,25 @@ def run_training_pipeline() -> None:
             early_stopping_rounds=CONFIG.training.early_stopping_rounds,
         )
 
-        # STEP 11: Train final XGBoost with best params
-        logger.info("STEP 11: Training final XGBoost model with best params...")
-        final_model = train_xgboost(
-            X_train_proc, y_train, X_val_proc, y_val,
-            params=best_params,
+        # STEP 11: Train and select the best rescue candidate
+        logger.info("STEP 11: Training rescue candidates and selecting best model...")
+        selection = select_best_model(
+            X_train_proc,
+            y_train,
+            X_val_proc,
+            y_val,
+            xgb_params=best_params,
             early_stopping_rounds=CONFIG.training.early_stopping_rounds,
+            random_state=CONFIG.training.random_state,
         )
+        final_model = selection.model
 
         # DIAGNOSIS: Check probability distribution
         diagnose_probability_distribution(final_model, X_val_proc, y_val)
 
 
-        # STEP 12: Threshold optimisation (validation only)
-        logger.info("STEP 12: Optimising decision threshold on validation set...")
+        # STEP 12: Threshold optimisation (validation only, selected model)
+        logger.info("STEP 12: Optimising decision threshold for selected model...")
         val_proba = final_model.predict_proba(X_val_proc)[:, 1]
         optimal_threshold, threshold_df = optimize_threshold(y_val, val_proba)
 
@@ -155,14 +169,23 @@ def run_training_pipeline() -> None:
 
         # STEP 16: Save artifacts
         logger.info("STEP 16: Saving model artifacts...")
-        save_artifacts(preprocessing_pipeline, final_model, optimal_threshold, CONFIG)
+        save_artifacts(
+            preprocessing_pipeline,
+            final_model,
+            optimal_threshold,
+            CONFIG,
+            model_type=selection.model_type,
+            selection_metric=selection.selection_metric,
+            candidate_scores=selection.candidate_scores,
+            model_params=selection.selected_params,
+        )
 
         # STEP 17: Log to MLflow
         logger.info("STEP 17: Logging experiment to MLflow...")
         log_full_experiment(
-            run_name=f"XGBoost_Optuna_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}",
+            run_name=f"ModelSelection_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}",
             model=final_model,
-            params=best_params,
+            params=selection.selected_params,
             train_metrics=train_metrics,
             val_metrics=val_metrics,
             test_metrics=test_metrics,
@@ -170,6 +193,9 @@ def run_training_pipeline() -> None:
             optuna_study=study,
             shap_plots_dir="artifacts/plots",
             confusion_matrix_plots_dir="artifacts/plots",
+            model_type=selection.model_type,
+            candidate_scores=selection.candidate_scores,
+            selection_metric=selection.selection_metric,
         )
 
         # STEP 18: Final report
@@ -192,7 +218,10 @@ def run_evaluate() -> None:
 
     artifacts_dir = CONFIG.api.artifacts_dir
     pipeline = joblib.load(os.path.join(artifacts_dir, "preprocessing_pipeline.pkl"))
-    model    = joblib.load(os.path.join(artifacts_dir, "xgboost_model.pkl"))
+    model_path = os.path.join(artifacts_dir, "model.pkl")
+    if not os.path.exists(model_path):
+        model_path = os.path.join(artifacts_dir, "xgboost_model.pkl")
+    model = joblib.load(model_path)
 
     with open(os.path.join(artifacts_dir, "threshold.json")) as f:
         threshold = json.load(f)["optimal_threshold"]
@@ -255,6 +284,17 @@ def print_final_report(
     print(f"Train-Val Accuracy Gap: {gaps['accuracy_gap']:+.4f}")
     print(f"Train-Val F1 Gap:       {gaps['f1_gap']:+.4f}")
     print("=" * 60)
+
+    if abs(gaps["accuracy_gap"]) < 0.08 and abs(gaps["f1_gap"]) < 0.08:
+        assessment = "Excellent - train-val gaps within target (<0.08)"
+    elif abs(gaps["accuracy_gap"]) < 0.12:
+        assessment = "Acceptable - some overfitting present"
+    else:
+        assessment = "Poor - significant overfitting detected"
+
+    print(f"GENERALISATION: {assessment}")
+    print("=" * 60 + "\n")
+    return
 
     # Generalisation assessment
     if abs(gaps["accuracy_gap"]) < 0.08 and abs(gaps["f1_gap"]) < 0.08:

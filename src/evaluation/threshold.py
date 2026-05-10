@@ -1,5 +1,5 @@
 """
-Optimized threshold selection using Precision-Recall curve.
+Balanced threshold selection for the Water Potability model.
 """
 
 import os
@@ -7,8 +7,8 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import precision_recall_curve, precision_score, recall_score
 
+from src.evaluation.scoring import find_best_threshold
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__, "training.log")
@@ -20,72 +20,41 @@ def optimize_threshold(
     output_csv: str = "artifacts/threshold_analysis.csv",
 ) -> Tuple[float, pd.DataFrame]:
     """
-    Find the optimal decision threshold using the F1-score derived from
-    the Precision-Recall curve.
+    Find the optimal decision threshold using the shared balanced rescue score.
 
     Args:
-        y_val:       True validation labels.
-        val_proba:   Predicted probabilities for the positive class on validation.
-        output_csv:  Path to save the full threshold analysis CSV.
+        y_val: True validation labels.
+        val_proba: Predicted probabilities for the positive class on validation.
+        output_csv: Path to save the full threshold analysis CSV.
 
     Returns:
         Tuple of (best_threshold float, results DataFrame with all thresholds).
     """
-    precisions, recalls, thresholds = precision_recall_curve(y_val, val_proba)
-    
-    best_score = -1.0
-    best_threshold = 0.5
-    best_f1 = 0.0
-    
-    # We want a threshold that keeps accuracy above base rate (0.61) 
-    # while maximizing F1.
-    from sklearn.metrics import accuracy_score
-    
-    for t in np.arange(0.45, 0.65, 0.01):
-        preds = (val_proba >= t).astype(int)
-        acc = accuracy_score(y_val, preds)
-        f1 = 2 * (precision_score(y_val, preds, zero_division=0) * recall_score(y_val, preds)) / (precision_score(y_val, preds, zero_division=0) + recall_score(y_val, preds) + 1e-9)
-        
-        # We need to explicitly protect precision. If precision drops too low, we're just guessing 1s.
-        prec = precision_score(y_val, preds, zero_division=0)
-        
-        # Penalize if precision is worse than 0.55
-        score = (0.6 * f1) + (0.4 * acc)
-        if prec < 0.55:
-            score *= 0.5 # Halve the score as penalty
-            
-        if score > best_score:
-            best_score = score
-            best_threshold = float(t)
-            best_f1 = f1
-
-    # Re-calculate precision/recall curve for logging
-    precisions, recalls, curve_thresholds = precision_recall_curve(y_val, val_proba)
-    f1_scores = 2 * (precisions[:-1] * recalls[:-1]) / (precisions[:-1] + recalls[:-1] + 1e-9)
-
-
-    logger.info(
-        f"Threshold optimisation complete — "
-        f"optimal threshold: {best_threshold:.4f} "
-        f"(max F1: {best_f1:.4f})"
+    best_threshold, best_metrics, results_df = find_best_threshold(
+        y_val,
+        val_proba,
+        min_threshold=0.30,
+        max_threshold=0.70,
+        step=0.01,
     )
 
-    # Compile results for logging
-    results = []
-    for i, t in enumerate(curve_thresholds):
-        results.append({
-            "threshold": float(t),
-            "precision": float(precisions[i]),
-            "recall":    float(recalls[i]),
-            "f1":        float(f1_scores[i] if i < len(f1_scores) else 0.0),
-        })
-        
-    results_df = pd.DataFrame(results)
+    logger.info(
+        "Threshold optimisation complete - "
+        f"optimal threshold: {best_threshold:.4f} "
+        f"(balanced_score={best_metrics['balanced_score']:.4f}, "
+        f"f1={best_metrics['f1']:.4f}, "
+        f"roc_auc={best_metrics['roc_auc']:.4f})"
+    )
 
-    # Persist threshold analysis for MLflow logging
-    os.makedirs(os.path.dirname(output_csv) if os.path.dirname(output_csv) else ".", exist_ok=True)
-    results_df.to_csv(output_csv, index=False)
-    logger.debug(f"Threshold analysis saved → {output_csv}")
+    try:
+        os.makedirs(os.path.dirname(output_csv) if os.path.dirname(output_csv) else ".", exist_ok=True)
+        results_df.to_csv(output_csv, index=False)
+        logger.debug(f"Threshold analysis saved -> {output_csv}")
+    except OSError as exc:
+        logger.warning(
+            "Threshold analysis CSV was not written because the file is unavailable: %s",
+            exc,
+        )
 
     return best_threshold, results_df
 
@@ -107,32 +76,31 @@ def diagnose_probability_distribution(model, X_val, y_val):
     print(f"Std probability:    {proba.std():.4f}")
     print()
 
-    # Distribution buckets
     buckets = [0.0, 0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 1.0]
     print("Distribution buckets:")
     for i in range(len(buckets) - 1):
         lo, hi = buckets[i], buckets[i + 1]
         count = ((proba >= lo) & (proba < hi)).sum()
         pct = count / len(proba) * 100
-        print(f"  [{lo:.2f} – {hi:.2f}): {count:4d} samples ({pct:.1f}%)")
+        print(f"  [{lo:.2f} - {hi:.2f}): {count:4d} samples ({pct:.1f}%)")
 
     print()
     print(
-        f"Samples BELOW 0.50 threshold: "
-        f"{(proba < 0.50).sum()} ({(proba < 0.50).mean()*100:.1f}%)"
+        "Samples BELOW 0.50 threshold: "
+        f"{(proba < 0.50).sum()} ({(proba < 0.50).mean() * 100:.1f}%)"
     )
     print(
-        f"Samples ABOVE 0.50 threshold: "
-        f"{(proba >= 0.50).sum()} ({(proba >= 0.50).mean()*100:.1f}%)"
+        "Samples ABOVE 0.50 threshold: "
+        f"{(proba >= 0.50).sum()} ({(proba >= 0.50).mean() * 100:.1f}%)"
     )
 
-    # Check per true class
-    pos_proba = proba[y_val == 1]
-    neg_proba = proba[y_val == 0]
+    y_arr = np.asarray(y_val)
+    pos_proba = proba[y_arr == 1]
+    neg_proba = proba[y_arr == 0]
     print(f"\nMean proba for TRUE positives: {pos_proba.mean():.4f}")
     print(f"Mean proba for TRUE negatives: {neg_proba.mean():.4f}")
     print(
-        f"Separation (delta):            "
+        "Separation (delta):            "
         f"{(pos_proba.mean() - neg_proba.mean()):.4f}"
     )
     print("=" * 50)

@@ -61,7 +61,7 @@ def train_baseline(
         min_samples_leaf=5,
         class_weight="balanced",
         random_state=42,
-        n_jobs=-1,
+        n_jobs=1,
     )
     rf.fit(X_train, y_train)
     logger.info("Random Forest baseline training complete.")
@@ -81,18 +81,20 @@ def train_baseline(
     for metric, value in val_metrics.items():
         logger.info(f"  {metric}: {value:.4f}")
 
-    # Log to MLflow
-    with mlflow.start_run(run_name="RandomForest_Baseline", nested=True):
-        params = {
-            "n_estimators": 100,
-            "max_depth": 6,
-            "min_samples_split": 10,
-            "min_samples_leaf": 5,
-            "class_weight": "balanced",
-        }
-        mlflow.log_params(params)
-        for metric_name, metric_val in val_metrics.items():
-            mlflow.log_metric(f"val_{metric_name}", metric_val)
-        mlflow.sklearn.log_model(rf, "random_forest_baseline")
+    try:
+        with mlflow.start_run(run_name="RandomForest_Baseline", nested=True):
+            params = {
+                "n_estimators": 100,
+                "max_depth": 6,
+                "min_samples_split": 10,
+                "min_samples_leaf": 5,
+                "class_weight": "balanced",
+            }
+            mlflow.log_params(params)
+            for metric_name, metric_val in val_metrics.items():
+                mlflow.log_metric(f"val_{metric_name}", metric_val)
+            mlflow.sklearn.log_model(rf, "random_forest_baseline")
+    except Exception as exc:
+        logger.warning(f"Skipping baseline MLflow logging: {exc}")
 
     return rf, val_metrics

@@ -43,10 +43,16 @@ def get_logger(name: str, log_file: Optional[str] = None) -> logging.Logger:
 
     # File handler — DEBUG and above
     if log_file:
-        os.makedirs("logs", exist_ok=True)
-        fh = logging.FileHandler(os.path.join("logs", log_file), encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
+        try:
+            os.makedirs("logs", exist_ok=True)
+            fh = logging.FileHandler(os.path.join("logs", log_file), encoding="utf-8")
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+        except OSError as exc:
+            logger.warning(
+                "File logging disabled because the log file could not be opened: %s",
+                exc,
+            )
 
     return logger

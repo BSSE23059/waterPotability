@@ -49,9 +49,13 @@ class WaterPotabilityPredictor:
     def _load_artifacts(self) -> None:
         """Load pipeline, model, threshold, and metadata from the artifacts directory."""
         pipeline_path  = os.path.join(self._artifacts_dir, "preprocessing_pipeline.pkl")
-        model_path     = os.path.join(self._artifacts_dir, "xgboost_model.pkl")
+        model_path     = os.path.join(self._artifacts_dir, "model.pkl")
+        legacy_model_path = os.path.join(self._artifacts_dir, "xgboost_model.pkl")
         threshold_path = os.path.join(self._artifacts_dir, "threshold.json")
         metadata_path  = os.path.join(self._artifacts_dir, "metadata.json")
+
+        if not os.path.exists(model_path) and os.path.exists(legacy_model_path):
+            model_path = legacy_model_path
 
         for path in [pipeline_path, model_path, threshold_path, metadata_path]:
             if not os.path.exists(path):
@@ -69,10 +73,11 @@ class WaterPotabilityPredictor:
         with open(metadata_path, "r", encoding="utf-8") as f:
             metadata = json.load(f)
         self.model_version = metadata.get("version", "unknown")
+        self.model_type = metadata.get("model_type", self.model.__class__.__name__)
 
         logger.info(
             f"Predictor loaded — version={self.model_version}, "
-            f"threshold={self.threshold:.4f}"
+            f"model_type={self.model_type}, threshold={self.threshold:.4f}"
         )
 
     def predict(self, sample: Dict[str, Any]) -> Dict[str, Any]:

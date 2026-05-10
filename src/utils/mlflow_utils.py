@@ -9,6 +9,7 @@ import os
 from typing import Any, Dict
 
 import mlflow
+import mlflow.sklearn
 import mlflow.xgboost
 
 from src.utils.logger import get_logger
@@ -24,9 +25,12 @@ def setup_mlflow(tracking_uri: str, experiment_name: str) -> None:
         tracking_uri:    Local path (e.g. "mlruns") or remote URI.
         experiment_name: Name of the MLflow experiment to use.
     """
-    mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(experiment_name)
-    logger.info(f"MLflow tracking URI: {tracking_uri} | Experiment: {experiment_name}")
+    try:
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(experiment_name)
+        logger.info(f"MLflow tracking URI: {tracking_uri} | Experiment: {experiment_name}")
+    except Exception as exc:
+        logger.warning(f"MLflow setup failed; continuing without tracking: {exc}")
 
 
 def log_full_experiment(
@@ -40,6 +44,9 @@ def log_full_experiment(
     optuna_study: Any,
     shap_plots_dir: str,
     confusion_matrix_plots_dir: str,
+    model_type: str = "xgboost_cv",
+    candidate_scores: Dict[str, Any] | None = None,
+    selection_metric: str = "balanced_f1_auc",
 ) -> None:
     """
     Log a complete experiment run to MLflow.
@@ -70,10 +77,18 @@ def log_full_experiment(
     if mlflow.active_run():
         mlflow.end_run()
 
-    with mlflow.start_run(run_name=run_name):
+    try:
+        run_context = mlflow.start_run(run_name=run_name)
+    except Exception as exc:
+        logger.warning(f"Skipping MLflow experiment logging: {exc}")
+        return
+
+    with run_context:
         # 1. Hyperparameters
         mlflow.log_params(params)
         mlflow.log_param("optimal_threshold", threshold)
+        mlflow.log_param("model_type", model_type)
+        mlflow.log_param("selection_metric", selection_metric)
 
         # 2. Metrics — all three splits
         for split, metrics in [
@@ -98,7 +113,19 @@ def log_full_experiment(
         )
 
         # 4. Model artifact
-        mlflow.xgboost.log_model(model, "xgboost_model")
+        if model.__class__.__module__.startswith("xgboost"):
+            mlflow.xgboost.log_model(model, "model")
+        else:
+            mlflow.sklearn.log_model(model, "model")
+
+        if candidate_scores:
+            for candidate_name, scores in candidate_scores.items():
+                for metric_name, metric_value in scores.items():
+                    if isinstance(metric_value, (int, float)):
+                        mlflow.log_metric(
+                            f"candidate_{candidate_name}_{metric_name}",
+                            float(metric_value),
+                        )
 
         # 5. SHAP plots
         if os.path.isdir(shap_plots_dir):
@@ -113,9 +140,10 @@ def log_full_experiment(
         # 7. Optuna trials CSV
         os.makedirs("artifacts", exist_ok=True)
         optuna_csv = "artifacts/optuna_trials.csv"
-        optuna_df = optuna_study.trials_dataframe()
-        optuna_df.to_csv(optuna_csv, index=False)
-        mlflow.log_artifact(optuna_csv, artifact_path="optuna")
+        if optuna_study is not None:
+            optuna_df = optuna_study.trials_dataframe()
+            optuna_df.to_csv(optuna_csv, index=False)
+            mlflow.log_artifact(optuna_csv, artifact_path="optuna")
 
         # 8. Threshold analysis CSV
         threshold_csv = "artifacts/threshold_analysis.csv"

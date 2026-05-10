@@ -65,6 +65,9 @@ def train_xgboost(
     Returns:
         Trained XGBClassifier with best_iteration and best_score attributes set.
     """
+    params = dict(params)
+    params.setdefault("n_jobs", 1)
+
     model = xgb.XGBClassifier(
         **params,
         eval_metric="logloss",
@@ -100,13 +103,15 @@ def get_default_params() -> Dict[str, Any]:
         Dict of XGBoost hyperparameter key-value pairs.
     """
     return {
-        "n_estimators": 300,
-        "max_depth": 3,
-        "learning_rate": 0.05,
-        "min_child_weight": 5,
-        "subsample": 0.75,
-        "colsample_bytree": 0.75,
-        "reg_alpha": 1.0,
-        "reg_lambda": 5.0,
-        "gamma": 0.3,
+        "n_estimators": 120,
+        "max_depth": 2,
+        "learning_rate": 0.035,
+        "min_child_weight": 25,
+        "subsample": 0.65,
+        "colsample_bytree": 0.65,
+        "reg_alpha": 8.0,
+        "reg_lambda": 30.0,
+        "gamma": 1.5,
+        "scale_pos_weight": 1.2,
+        "n_jobs": 1,
     }

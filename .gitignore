@@ -1,18 +1,48 @@
+# Python cache files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.pkl
-*.log
+
+# Local environment files
 .env
-mlruns/
-artifacts/models/
-artifacts/plots/
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Local IDE/editor state
+.idea/
+.vscode/
+
+# Test, type-checking, and coverage caches
 .pytest_cache/
+pytest-cache-files-*/
 .mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Build/package outputs
 *.egg-info/
 dist/
 build/
-.venv/
-venv/
+
+# Logs and runtime outputs
+*.log
+logs/
+
+# Model and experiment artifacts
+*.pkl
+mlruns/
+artifacts/models/
+artifacts/plots/
+artifacts/data/
+artifacts/metrics/
+artifacts/shap/
+artifacts/*.csv
+
+# Notebook checkpoints
 *.ipynb_checkpoints/

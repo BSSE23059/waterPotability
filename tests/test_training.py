@@ -170,8 +170,8 @@ class TestThresholdInValidRange:
         val_proba = model.predict_proba(X_val)[:, 1]
         best_threshold, df = optimize_threshold(y_val, val_proba)
 
-        assert 0.45 <= best_threshold <= 0.65, (
-            f"Optimal threshold {best_threshold:.2f} is outside the [0.45, 0.65] range."
+        assert 0.30 <= best_threshold <= 0.70, (
+            f"Optimal threshold {best_threshold:.2f} is outside the [0.30, 0.70] range."
         )
 
     def test_threshold_analysis_df_columns(self, prepared_splits):

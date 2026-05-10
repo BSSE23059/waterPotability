@@ -57,7 +57,10 @@ def save_confusion_matrix_plot(
     plt.tight_layout()
 
     path = os.path.join(output_dir, f"confusion_matrix_{split_name}.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
+    try:
+        plt.savefig(path, dpi=150, bbox_inches="tight")
+    except OSError as exc:
+        logger.warning(f"Confusion matrix plot was not written: {exc}")
     plt.close(fig)
     logger.debug(f"Confusion matrix plot saved → {path}")
 
