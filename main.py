@@ -29,7 +29,11 @@ from src.evaluation.threshold import optimize_threshold, diagnose_probability_di
 from src.explainability.shap_explainer import generate_shap_artifacts
 from src.preprocessing.pipeline import build_pipeline, get_pipeline_feature_names
 from src.training.baseline import train_baseline
-from src.training.model_selection import select_best_model
+from src.training.model_selection import (
+    save_model_comparison_report,
+    save_threshold_sweep_report,
+    select_best_model,
+)
 from src.training.tuner import run_optuna_study
 from src.utils.artifact_manager import save_artifacts, save_processed_data
 from src.utils.logger import get_logger
@@ -128,15 +132,28 @@ def run_training_pipeline() -> None:
             random_state=CONFIG.training.random_state,
         )
         final_model = selection.model
+        optimal_threshold = selection.threshold
+        save_threshold_sweep_report(selection.threshold_sweep)
 
         # DIAGNOSIS: Check probability distribution
         diagnose_probability_distribution(final_model, X_val_proc, y_val)
 
 
-        # STEP 12: Threshold optimisation (validation only, selected model)
-        logger.info("STEP 12: Optimising decision threshold for selected model...")
+        # STEP 12: Threshold audit (validation only, selected model)
+        logger.info("STEP 12: Auditing selected validation threshold...")
         val_proba = final_model.predict_proba(X_val_proc)[:, 1]
-        optimal_threshold, threshold_df = optimize_threshold(y_val, val_proba)
+        audited_threshold, threshold_df = optimize_threshold(
+            y_val,
+            val_proba,
+            model_name=selection.model_type,
+        )
+        if abs(audited_threshold - optimal_threshold) > 1e-9:
+            logger.warning(
+                "Selection threshold %.4f differed from threshold audit %.4f; "
+                "using the selection threshold fixed before test evaluation.",
+                optimal_threshold,
+                audited_threshold,
+            )
 
         # STEP 13: Evaluate all splits
         logger.info("STEP 13: Evaluating all splits...")
@@ -149,6 +166,15 @@ def run_training_pipeline() -> None:
         )
         test_metrics = evaluate_split(
             final_model, X_test_proc, y_test, "test", optimal_threshold
+        )
+        save_model_comparison_report(
+            selection,
+            X_train_proc,
+            y_train,
+            X_val_proc,
+            y_val,
+            X_test_proc,
+            y_test,
         )
 
         # STEP 14: Overfitting detection
@@ -199,7 +225,14 @@ def run_training_pipeline() -> None:
         )
 
         # STEP 18: Final report
-        print_final_report(train_metrics, val_metrics, test_metrics, optimal_threshold, gaps)
+        print_final_report(
+            train_metrics,
+            val_metrics,
+            test_metrics,
+            optimal_threshold,
+            gaps,
+            model_type=selection.model_type,
+        )
 
 
 def run_evaluate() -> None:
@@ -225,6 +258,11 @@ def run_evaluate() -> None:
 
     with open(os.path.join(artifacts_dir, "threshold.json")) as f:
         threshold = json.load(f)["optimal_threshold"]
+    metadata_path = os.path.join(artifacts_dir, "metadata.json")
+    model_type = "unknown"
+    if os.path.exists(metadata_path):
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            model_type = json.load(f).get("model_type", "unknown")
 
     df = load_and_validate(CONFIG.data.filepath)
     X  = df.drop(CONFIG.data.target_column, axis=1)
@@ -235,8 +273,11 @@ def run_evaluate() -> None:
 
     test_metrics = evaluate_split(model, X_test_proc, y_test, "test", threshold)
     logger.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}")
+    logger.info(f"Test Precision: {test_metrics['precision']:.4f}")
+    logger.info(f"Test Recall:    {test_metrics['recall']:.4f}")
     logger.info(f"Test F1:       {test_metrics['f1']:.4f}")
     logger.info(f"Test ROC-AUC:  {test_metrics['roc_auc']:.4f}")
+    print_evaluation_report(model_type, test_metrics, threshold)
 
 
 def run_serve() -> None:
@@ -265,11 +306,20 @@ def print_final_report(
     test_m: dict,
     threshold: float,
     gaps: dict,
+    model_type: str,
 ) -> None:
     """Print a formatted performance table to stdout."""
     print("\n" + "=" * 60)
     print("FINAL MODEL PERFORMANCE REPORT")
     print("=" * 60)
+    print(f"Selected Model:         {model_type}")
+    print(f"Selected Threshold:     {threshold:.2f}")
+    print(
+        "This model was selected with class-1 precision as the primary objective "
+        "because false positives are the highest-risk error type in water "
+        "potability prediction."
+    )
+    print("-" * 50)
     print(f"{'Metric':<15} {'Train':>10} {'Val':>10} {'Test':>10}")
     print("-" * 50)
     for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
@@ -280,14 +330,27 @@ def print_final_report(
             f"{test_m[metric]:>10.4f}"
         )
     print("-" * 50)
-    print(f"Optimal Threshold:      {threshold:.2f}")
+    print(f"Test Confusion Matrix:  {test_m['confusion_matrix']}")
+    print(f"Test False Positives:   {test_m['false_positives']}")
+    print(f"Test False Negatives:   {test_m['false_negatives']}")
+    print(f"Test True Positives:    {test_m['true_positives']}")
+    print(f"Test True Negatives:    {test_m['true_negatives']}")
     print(f"Train-Val Accuracy Gap: {gaps['accuracy_gap']:+.4f}")
+    print(f"Train-Val Precision Gap:{train_m['precision'] - val_m['precision']:+.4f}")
     print(f"Train-Val F1 Gap:       {gaps['f1_gap']:+.4f}")
+    print(f"Train-Val ROC-AUC Gap:  {gaps['auc_gap']:+.4f}")
     print("=" * 60)
 
-    if abs(gaps["accuracy_gap"]) < 0.08 and abs(gaps["f1_gap"]) < 0.08:
+    precision_gap = train_m["precision"] - val_m["precision"]
+    gap_values = [
+        abs(gaps["accuracy_gap"]),
+        abs(precision_gap),
+        abs(gaps["f1_gap"]),
+        abs(gaps["auc_gap"]),
+    ]
+    if all(gap < 0.08 for gap in gap_values):
         assessment = "Excellent - train-val gaps within target (<0.08)"
-    elif abs(gaps["accuracy_gap"]) < 0.12:
+    elif all(gap < 0.12 for gap in gap_values):
         assessment = "Acceptable - some overfitting present"
     else:
         assessment = "Poor - significant overfitting detected"
@@ -303,6 +366,23 @@ def print_final_report(
         print("⚠ GENERALISATION: Acceptable — some overfitting present")
     else:
         print("✗ GENERALISATION: Poor — significant overfitting detected")
+    print("=" * 60 + "\n")
+
+
+def print_evaluation_report(model_type: str, test_m: dict, threshold: float) -> None:
+    """Print saved-model evaluation metrics."""
+    print("\n" + "=" * 60)
+    print("SAVED MODEL EVALUATION REPORT")
+    print("=" * 60)
+    print(f"Selected Model:       {model_type}")
+    print(f"Saved Threshold:      {threshold:.2f}")
+    print(f"Test Precision:       {test_m['precision']:.4f}")
+    print(f"Test Recall:          {test_m['recall']:.4f}")
+    print(f"Test F1:              {test_m['f1']:.4f}")
+    print(f"Test ROC-AUC:         {test_m['roc_auc']:.4f}")
+    print(f"Confusion Matrix:     {test_m['confusion_matrix']}")
+    print(f"False Positives:      {test_m['false_positives']}")
+    print(f"False Negatives:      {test_m['false_negatives']}")
     print("=" * 60 + "\n")
 
 

@@ -46,7 +46,7 @@ def log_full_experiment(
     confusion_matrix_plots_dir: str,
     model_type: str = "xgboost_cv",
     candidate_scores: Dict[str, Any] | None = None,
-    selection_metric: str = "balanced_f1_auc",
+    selection_metric: str = "precision_focused_validation_score",
 ) -> None:
     """
     Log a complete experiment run to MLflow.
@@ -111,6 +111,14 @@ def log_full_experiment(
             "train_val_f1_gap",
             train_metrics["f1"] - val_metrics["f1"],
         )
+        mlflow.log_metric(
+            "train_val_precision_gap",
+            train_metrics["precision"] - val_metrics["precision"],
+        )
+        mlflow.log_metric(
+            "train_val_roc_auc_gap",
+            train_metrics["roc_auc"] - val_metrics["roc_auc"],
+        )
 
         # 4. Model artifact
         if model.__class__.__module__.startswith("xgboost"):
@@ -149,6 +157,10 @@ def log_full_experiment(
         threshold_csv = "artifacts/threshold_analysis.csv"
         if os.path.exists(threshold_csv):
             mlflow.log_artifact(threshold_csv, artifact_path="threshold")
+
+        reports_dir = "artifacts/reports"
+        if os.path.isdir(reports_dir):
+            mlflow.log_artifacts(reports_dir, artifact_path="reports")
 
         run_id = mlflow.active_run().info.run_id
         logger.info(f"MLflow run logged successfully — run_id: {run_id}")

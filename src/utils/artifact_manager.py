@@ -22,7 +22,7 @@ def save_artifacts(
     optimal_threshold: float,
     config: SimpleNamespace,
     model_type: str = "xgboost_cv",
-    selection_metric: str = "balanced_f1_auc",
+    selection_metric: str = "precision_focused_validation_score",
     candidate_scores: Optional[Dict[str, Any]] = None,
     model_params: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -63,6 +63,13 @@ def save_artifacts(
         "selected_threshold": optimal_threshold,
         "model_type": model_type,
         "selection_metric": selection_metric,
+        "selection_objective": (
+            "0.65*val_precision + 0.20*val_f1 + "
+            "0.10*val_roc_auc + 0.05*val_accuracy with validation "
+            "F1/recall floors, false-positive reduction thresholding, "
+            "and a train-validation generalization-gap guard"
+        ),
+        "priority_error_type": "false_positive_class_1",
         "candidate_scores": candidate_scores or {},
         "model_params": model_params or {},
         "config": {

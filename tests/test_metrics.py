@@ -86,8 +86,8 @@ class TestOptimizeThreshold:
 
         threshold, _ = optimize_threshold(y_val, val_proba)
 
-        assert 0.45 <= threshold <= 0.65, (
-            f"Threshold {threshold:.2f} outside [0.45, 0.65]."
+        assert 0.30 <= threshold <= 0.85, (
+            f"Threshold {threshold:.2f} outside [0.30, 0.85]."
         )
 
     def test_results_dataframe_non_empty(self):

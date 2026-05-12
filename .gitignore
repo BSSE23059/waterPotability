@@ -41,6 +41,7 @@ artifacts/models/
 artifacts/plots/
 artifacts/data/
 artifacts/metrics/
+artifacts/reports/
 artifacts/shap/
 artifacts/*.csv
 

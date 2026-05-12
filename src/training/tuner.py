@@ -11,10 +11,13 @@ import numpy as np
 import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
-from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
-from src.evaluation.scoring import find_best_threshold
+from src.evaluation.scoring import (
+    metrics_at_threshold,
+    precision_focused_selection_score,
+    select_precision_threshold,
+)
 from src.training.trainer import train_xgboost
 from src.utils.logger import get_logger
 
@@ -48,16 +51,16 @@ def run_optuna_study(
 
     def objective(trial: optuna.Trial) -> float:
         params = {
-            "n_estimators": trial.suggest_int("n_estimators", 60, 180),
-            "max_depth": trial.suggest_int("max_depth", 1, 2),
-            "learning_rate": trial.suggest_float("learning_rate", 0.015, 0.05, log=True),
-            "min_child_weight": trial.suggest_int("min_child_weight", 20, 50),
-            "subsample": trial.suggest_float("subsample", 0.55, 0.80),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.55, 0.80),
-            "reg_alpha": trial.suggest_float("reg_alpha", 4.0, 16.0),
-            "reg_lambda": trial.suggest_float("reg_lambda", 15.0, 50.0),
-            "gamma": trial.suggest_float("gamma", 0.5, 4.0),
-            "scale_pos_weight": trial.suggest_float("scale_pos_weight", 1.0, 1.35),
+            "n_estimators": trial.suggest_int("n_estimators", 100, 400),
+            "max_depth": trial.suggest_int("max_depth", 2, 3),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.05, log=True),
+            "min_child_weight": trial.suggest_int("min_child_weight", 10, 30),
+            "subsample": trial.suggest_float("subsample", 0.50, 0.80),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.50, 0.80),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1.0, 15.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 5.0, 30.0),
+            "gamma": trial.suggest_float("gamma", 0.5, 5.0),
+            "scale_pos_weight": trial.suggest_float("scale_pos_weight", 1.0, 1.8),
             "n_jobs": 1,
         }
 
@@ -80,13 +83,10 @@ def run_optuna_study(
             )
 
             val_proba = model.predict_proba(X_score)[:, 1]
-            _, metrics, _ = find_best_threshold(y_score, val_proba)
-
+            threshold, val_metrics, _ = select_precision_threshold(y_score, val_proba)
             train_proba = model.predict_proba(X_fit)[:, 1]
-            train_auc = float(roc_auc_score(y_fit, train_proba))
-            overfit_penalty = max(0.0, train_auc - metrics["roc_auc"] - 0.10)
-
-            fold_score = metrics["balanced_score"] - (0.10 * overfit_penalty)
+            train_metrics = metrics_at_threshold(y_fit, train_proba, threshold)
+            fold_score, _ = precision_focused_selection_score(train_metrics, val_metrics)
             fold_scores.append(fold_score)
 
             trial.report(float(np.mean(fold_scores)), step=fold_idx)
@@ -113,7 +113,7 @@ def run_optuna_study(
 
     best_params = dict(study.best_params)
     best_params["n_jobs"] = 1
-    logger.info(f"Optuna CV complete - best balanced score: {study.best_value:.4f}")
+    logger.info(f"Optuna CV complete - best precision-focused score: {study.best_value:.4f}")
     logger.info(f"Best XGBoost params: {best_params}")
 
     return best_params, study

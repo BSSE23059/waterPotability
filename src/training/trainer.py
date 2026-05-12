@@ -103,15 +103,15 @@ def get_default_params() -> Dict[str, Any]:
         Dict of XGBoost hyperparameter key-value pairs.
     """
     return {
-        "n_estimators": 120,
+        "n_estimators": 220,
         "max_depth": 2,
-        "learning_rate": 0.035,
-        "min_child_weight": 25,
+        "learning_rate": 0.025,
+        "min_child_weight": 20,
         "subsample": 0.65,
         "colsample_bytree": 0.65,
-        "reg_alpha": 8.0,
-        "reg_lambda": 30.0,
-        "gamma": 1.5,
-        "scale_pos_weight": 1.2,
+        "reg_alpha": 6.0,
+        "reg_lambda": 18.0,
+        "gamma": 2.0,
+        "scale_pos_weight": 1.35,
         "n_jobs": 1,
     }

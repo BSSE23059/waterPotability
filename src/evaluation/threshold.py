@@ -1,5 +1,5 @@
 """
-Balanced threshold selection for the Water Potability model.
+Precision-focused threshold selection for the Water Potability model.
 """
 
 import os
@@ -8,7 +8,7 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
-from src.evaluation.scoring import find_best_threshold
+from src.evaluation.scoring import select_precision_threshold
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__, "training.log")
@@ -18,9 +18,10 @@ def optimize_threshold(
     y_val: np.ndarray,
     val_proba: np.ndarray,
     output_csv: str = "artifacts/threshold_analysis.csv",
+    model_name: str = "selected_model",
 ) -> Tuple[float, pd.DataFrame]:
     """
-    Find the optimal decision threshold using the shared balanced rescue score.
+    Find the optimal decision threshold using validation precision as priority.
 
     Args:
         y_val: True validation labels.
@@ -30,20 +31,23 @@ def optimize_threshold(
     Returns:
         Tuple of (best_threshold float, results DataFrame with all thresholds).
     """
-    best_threshold, best_metrics, results_df = find_best_threshold(
+    best_threshold, best_metrics, results_df = select_precision_threshold(
         y_val,
         val_proba,
         min_threshold=0.30,
-        max_threshold=0.70,
+        max_threshold=0.85,
         step=0.01,
     )
+    results_df.insert(0, "split", "validation")
+    results_df.insert(0, "model_name", model_name)
 
     logger.info(
         "Threshold optimisation complete - "
         f"optimal threshold: {best_threshold:.4f} "
-        f"(balanced_score={best_metrics['balanced_score']:.4f}, "
+        f"(precision={best_metrics['precision']:.4f}, "
         f"f1={best_metrics['f1']:.4f}, "
-        f"roc_auc={best_metrics['roc_auc']:.4f})"
+        f"roc_auc={best_metrics['roc_auc']:.4f}, "
+        f"reason={best_metrics['threshold_selection_reason']})"
     )
 
     try:

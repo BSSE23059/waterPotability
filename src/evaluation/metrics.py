@@ -8,6 +8,9 @@ for train, validation, and test splits. Also saves confusion matrix plots.
 import os
 from typing import Dict, Any
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -21,6 +24,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from src.evaluation.scoring import get_positive_scores
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__, "training.log")
@@ -42,7 +46,7 @@ def save_confusion_matrix_plot(
         output_dir: Directory to save the PNG file.
     """
     os.makedirs(output_dir, exist_ok=True)
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
 
     fig, ax = plt.subplots(figsize=(6, 5))
     sns.heatmap(
@@ -94,8 +98,10 @@ def evaluate_split(
     Returns:
         Dict with all computed metrics.
     """
-    proba = model.predict_proba(X)[:, 1]
+    proba = get_positive_scores(model, X)
     preds = (proba >= threshold).astype(int)
+    cm = confusion_matrix(y, preds, labels=[0, 1])
+    tn, fp, fn, tp = [int(value) for value in cm.ravel()]
 
     metrics: Dict[str, Any] = {
         "split":            split_name,
@@ -104,13 +110,19 @@ def evaluate_split(
         "recall":           float(recall_score(y, preds, zero_division=0)),
         "f1":               float(f1_score(y, preds, zero_division=0)),
         "roc_auc":          float(roc_auc_score(y, proba)),
-        "confusion_matrix": confusion_matrix(y, preds).tolist(),
+        "confusion_matrix": cm.tolist(),
+        "false_positives":  fp,
+        "false_negatives":  fn,
+        "true_positives":   tp,
+        "true_negatives":   tn,
+        "predicted_positives": int(preds.sum()),
     }
 
     logger.info(f"[{split_name.upper()}] Evaluation @ threshold={threshold:.2f}:")
     for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
         logger.info(f"  {metric}: {metrics[metric]:.4f}")
     logger.info(f"  confusion_matrix: {metrics['confusion_matrix']}")
+    logger.info(f"  false_positives: {fp} | false_negatives: {fn}")
 
     save_confusion_matrix_plot(y, preds, split_name, output_dir=plots_dir)
     return metrics
